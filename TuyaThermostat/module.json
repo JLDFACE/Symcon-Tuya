@@ -1,0 +1,15 @@
+{
+  "id": "{F70A586B-8A38-4441-A2FB-4670EA4BC577}",
+  "name": "Tuya Thermostat",
+  "type": 3,
+  "vendor": "FACE GmbH",
+  "aliases": [
+    "Tuya WLAN-Thermostat",
+    "Smart Life Thermostat",
+    "Handtuchheizung (Tuya)"
+  ],
+  "parentRequirements": [],
+  "childRequirements": [],
+  "implemented": [],
+  "prefix": "TUYA"
+}

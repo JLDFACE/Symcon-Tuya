@@ -1,0 +1,12 @@
+{
+  "id": "{C70D4F48-1BEC-4D3E-A2D7-73878FE9C71D}",
+  "author": "FACE GmbH",
+  "name": "Tuya Local",
+  "url": "https://github.com/JLDFACE/Symcon-Tuya",
+  "compatibility": {
+    "version": "7.0"
+  },
+  "version": "0.1",
+  "build": 1,
+  "date": 20261018
+}

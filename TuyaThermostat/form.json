@@ -1,0 +1,48 @@
+{
+  "elements": [
+    {
+      "type": "ValidationTextBox",
+      "name": "Host",
+      "caption": "IP-Adresse",
+      "validate": "^[A-Za-z0-9_.-]+$"
+    },
+    {
+      "type": "ValidationTextBox",
+      "name": "DeviceID",
+      "caption": "Device-ID (nur zur Info)"
+    },
+    {
+      "type": "PasswordTextBox",
+      "name": "LocalKey",
+      "caption": "Local Key (16 Zeichen)"
+    },
+    {
+      "type": "NumberSpinner",
+      "name": "PollInterval",
+      "caption": "Abfrageintervall (0 = aus)",
+      "minimum": 0,
+      "maximum": 3600,
+      "suffix": "s"
+    },
+    {
+      "type": "Label",
+      "caption": "Nur Tuya-Protokoll 3.5. Device-ID und Local Key liefert der QR-Login der Smart-Life-App (siehe README)."
+    }
+  ],
+  "actions": [
+    {
+      "type": "RowLayout",
+      "items": [
+        { "type": "Button", "caption": "Jetzt abfragen", "onClick": "TUYA_Update($id);" },
+        { "type": "Button", "caption": "Ein", "onClick": "TUYA_SetPower($id, true);" },
+        { "type": "Button", "caption": "Aus", "onClick": "TUYA_SetPower($id, false);" }
+      ]
+    }
+  ],
+  "status": [
+    { "code": 102, "icon": "active", "caption": "Gerät antwortet" },
+    { "code": 104, "icon": "inactive", "caption": "IP-Adresse fehlt" },
+    { "code": 201, "icon": "error", "caption": "Local Key fehlt oder hat nicht 16 Zeichen" },
+    { "code": 202, "icon": "error", "caption": "Gerät nicht erreichbar oder Schlüssel falsch (Debug ansehen)" }
+  ]
+}
