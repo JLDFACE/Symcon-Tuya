@@ -59,3 +59,12 @@ wenn das Gerät neu in der App angelernt wird.
 php tests/live_test.php <ip> <local_key>                  # Status lesen
 php tests/live_test.php <ip> <local_key> '{"1":false}'    # ausschalten
 ```
+
+## Beispiel: Handtuchheizung nach dem Duschen
+
+`examples/Handtuchheizung_nach_dem_Duschen.php` ist ein Ereignis-Skript, das die
+Heizung an eine Dusch-Szene koppelt: morgens Vorheizen ab Szenenstart, sonst
+Start bei „Wasser aus“ (erkannt am fallenden Warmwasserspeicher bzw. an der
+Feuchtespitze), danach Trockenzeit abzüglich Wärmenachlauf. Wird die Heizung
+außerhalb eines Laufs eingeschaltet, geht sie sofort wieder aus. Die Objekt-IDs
+im Skriptkopf gehören zur FACE-Dev-Anlage und müssen angepasst werden.
