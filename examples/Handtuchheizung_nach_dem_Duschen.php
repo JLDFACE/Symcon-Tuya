@@ -12,7 +12,11 @@
 //      Klar zu sehen bei langen Duschen, werktags morgens oft kaum.
 //   2. Abluftfeuchte (Vallox) ist um ≥ HUM_RISE gestiegen und fällt wieder um
 //      ≥ HUM_FALL – der Höchstwert liegt etwa beim Wasser-aus.
-//   3. Dusch-Szene geht aus, oder DUSCHEN_MAX Minuten sind um.
+//   3. Dusch-Szene geht aus, oder DUSCHEN_MAX Minuten sind um – aber nur, wenn
+//      Feuchte oder Speicher überhaupt reagiert haben. Sonst wurde nicht
+//      geduscht (Szene nur kurz angetippt), der Lauf endet ohne Trocknen.
+// Steigt die Feuchte beim Trocknen über die bisherige Spitze (zweite Person,
+// Pause unter der Dusche), gilt wieder „Duschen" und das Ende rückt nach hinten.
 // Streng: Wird die Heizung außerhalb eines Laufs eingeschaltet (App, Gerät),
 // schaltet dieses Skript sie sofort wieder aus.
 
@@ -87,7 +91,14 @@ if ($sender == 'Variable' && $_IPS['VARIABLE'] == SZENE) {
         }
         starten($uhr >= VON && $uhr < BIS);
     } elseif ($phase == PHASE_DUSCHEN && empty($z['wasserAus'])) {
-        wasserAus($now, 'Szene beendet');
+        erkennen($now);   // letzter Stand der Signale, kann selbst „Wasser aus" melden
+        if (GetValueInteger($vPhase) == PHASE_DUSCHEN) {
+            if (geduscht()) {
+                wasserAus($now, 'Szene beendet');
+            } else {
+                beenden('Kein Duschen erkannt (Feuchte und Speicher unverändert)');
+            }
+        }
     }
     return;
 }
@@ -104,7 +115,10 @@ if ($sender == 'TimerEvent') {
     }
     if ($phase == PHASE_DUSCHEN) {
         erkennen($now);
-    } elseif ($now >= GetValueInteger($vAusUm)) {
+        if (GetValueInteger($vPhase) == PHASE_AUS) {
+            return;
+        }
+    } elseif (!weiterGeduscht($now) && $now >= GetValueInteger($vAusUm)) {
         beenden('Trocknen fertig, Restwärme läuft nach');
         return;
     }
@@ -168,8 +182,39 @@ function erkennen(int $now): void
     } elseif ($z['humMax'] - $z['humStart'] >= HUM_RISE && $z['humMax'] - $hum >= HUM_FALL) {
         wasserAus($z['humMaxSeit'], sprintf('Feuchte-Spitze %.0f %%', $z['humMax']));
     } elseif ($now - $z['start'] >= DUSCHEN_MAX * 60) {
-        wasserAus($now, DUSCHEN_MAX . ' min ohne Erkennung');
+        if (geduscht()) {
+            wasserAus($now, DUSCHEN_MAX . ' min ohne Erkennung');
+        } else {
+            beenden('Kein Duschen erkannt nach ' . DUSCHEN_MAX . ' min');
+        }
     }
+}
+
+/** Gab es überhaupt ein Dusch-Signal? Kurzes Antippen der Szene hinterlässt keins. */
+function geduscht(): bool
+{
+    global $z;
+    return $z['humMax'] - $z['humStart'] >= HUM_RISE || $z['wwStart'] - $z['wwMin'] >= WW_DROP;
+}
+
+/**
+ * Steigt die Feuchte beim Trocknen über die bisherige Spitze, wird weiter
+ * geduscht (zweite Spitze, zweite Person): zurück auf Duschen, „Wasser aus"
+ * kommt dann mit der neuen Spitze und schiebt das Ende nach hinten.
+ */
+function weiterGeduscht(int $now): bool
+{
+    global $z, $vPhase;
+    $hum = GetValueFloat(FEUCHTE);
+    if ($hum < $z['humMax'] + 1) {
+        return false;
+    }
+    $z['humMax'] = $hum;
+    $z['humMaxSeit'] = $now;
+    speichern($z);
+    SetValueInteger($vPhase, PHASE_DUSCHEN);
+    status(sprintf('Feuchte steigt wieder auf %.0f %% – es wird weiter geduscht (%s)', $hum, date('H:i')));
+    return true;
 }
 
 function wasserAus(int $ts, string $grund): void
