@@ -85,6 +85,9 @@ class TuyaProtocol
                 break;
             }
         }
+        if (!$dps) {
+            throw new RuntimeException('Keine Statusantwort');
+        }
         return $dps;
     }
 
@@ -103,16 +106,21 @@ class TuyaProtocol
 
         // Antwort: zuerst eine Quittung (0x0d), danach ein Statusbericht (0x08)
         $reported = [];
+        $acked = false;
         $deadline = microtime(true) + $this->timeout;
         while (microtime(true) < $deadline) {
             $msg = $this->receive($this->sessionKey, $deadline);
             if ($msg === null) {
                 break;
             }
+            $acked = true;
             $reported = array_replace($reported, $this->extractDps($msg['payload']));
             if (count(array_intersect_key($dps, $reported)) === count($dps)) {
                 break;
             }
+        }
+        if (!$acked) {
+            throw new RuntimeException('Keine Quittung auf den Schaltbefehl');
         }
         return $reported;
     }

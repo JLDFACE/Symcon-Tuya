@@ -39,6 +39,7 @@ const HUM_FALL    = 1.0;     // %-Punkte
 const TAKT        = 60;      // s Prüfintervall während eines Laufs
 
 const PHASE_AUS = 0, PHASE_DUSCHEN = 1, PHASE_TROCKNEN = 2;
+const NICHT_ERREICHT = ' – Heizung reagiert nicht, neuer Versuch im nächsten Takt';
 
 $self      = $_IPS['SELF'];
 $vAktiv    = IPS_GetObjectIDByIdent('Aktiv', $self);
@@ -105,6 +106,13 @@ if ($sender == 'TimerEvent') {
         erkennen($now);
     } elseif ($now >= GetValueInteger($vAusUm)) {
         beenden('Trocknen fertig, Restwärme läuft nach');
+        return;
+    }
+    // Hätte die Heizung an sein müssen und ist es nicht (Befehl verloren, Gerät
+    // kurz weg), wird nachgeschaltet. Von Hand aus beendet den Lauf über POWER.
+    $sollAn = GetValueInteger($vPhase) == PHASE_TROCKNEN || !empty($z['vorheizen']);
+    if ($sollAn && !GetValueBoolean(POWER)) {
+        status(einschalten() ? 'Heizung nachgeschaltet (' . date('H:i') . ')' : 'Heizung reagiert weiterhin nicht (' . date('H:i') . ')');
     }
 }
 
@@ -125,17 +133,17 @@ function starten(bool $vorheizen): void
     SetValueInteger($vAusUm, 0);
     IPS_SetScriptTimer($self, TAKT);
     if ($vorheizen) {
-        einschalten();
-        status(sprintf('Vorheizen seit %s (außen %.1f °C)', date('H:i'), GetValueFloat(AUSSEN)));
+        $ok = einschalten();
+        status(sprintf('Vorheizen seit %s (außen %.1f °C)', date('H:i'), GetValueFloat(AUSSEN)) . ($ok ? '' : NICHT_ERREICHT));
     } else {
         status(sprintf('Duschen seit %s – Heizung startet bei „Wasser aus"', date('H:i')));
     }
 }
 
-function einschalten(): void
+function einschalten(): bool
 {
-    TUYA_SetPower(HEIZUNG, true);
-    TUYA_SetSetpoint(HEIZUNG, SOLL);   // das Gerät stellt beim Ausschalten selbst auf 7 °C
+    // das Gerät stellt beim Ausschalten selbst auf 7 °C, daher Soll immer mitsetzen
+    return TUYA_SetPower(HEIZUNG, true) && TUYA_SetSetpoint(HEIZUNG, SOLL);
 }
 
 function erkennen(int $now): void
@@ -172,10 +180,8 @@ function wasserAus(int $ts, string $grund): void
     $ausUm = $ts + (TROCKNEN - NACHLAUF) * 60;
     SetValueInteger($vPhase, PHASE_TROCKNEN);
     SetValueInteger($vAusUm, $ausUm);
-    if (empty($z['vorheizen'])) {
-        einschalten();
-    }
-    status(sprintf('Wasser aus %s (%s) – trocknet, Heizung aus um %s', date('H:i', $ts), $grund, date('H:i', $ausUm)));
+    $ok = empty($z['vorheizen']) ? einschalten() : true;
+    status(sprintf('Wasser aus %s (%s) – trocknet, Heizung aus um %s', date('H:i', $ts), $grund, date('H:i', $ausUm)) . ($ok ? '' : NICHT_ERREICHT));
 }
 
 function beenden(string $grund): void

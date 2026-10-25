@@ -94,9 +94,10 @@ class TuyaThermostat extends IPSModule
     /** Liest alle Datenpunkte vom Gerät. */
     public function Update(): bool
     {
+        // Die Abfrage drängelt nicht: läuft gerade ein Schaltbefehl, fällt dieser Takt aus
         $dps = $this->Transact(function (TuyaProtocol $t) {
             return $t->query();
-        });
+        }, 1000, 1);
         if ($dps === null) {
             return false;
         }
@@ -156,9 +157,10 @@ class TuyaThermostat extends IPSModule
 
     private function Control(array $dps): bool
     {
+        // Schaltbefehle warten auf eine laufende Abfrage und versuchen es einmal neu
         $reported = $this->Transact(function (TuyaProtocol $t) use ($dps) {
             return $t->control($dps);
-        });
+        }, 12000, 2);
         if ($reported === null) {
             return false;
         }
@@ -167,35 +169,51 @@ class TuyaThermostat extends IPSModule
         return true;
     }
 
-    /** Öffnet eine Sitzung, führt $fn aus, schließt wieder. null = Fehler. */
-    private function Transact(callable $fn): ?array
+    /**
+     * Öffnet eine Sitzung, führt $fn aus, schließt wieder. null = Fehler oder belegt.
+     * Eine Sitzung dauert bis zu ~6 s (Verbinden + Antwort je 3 s Timeout).
+     */
+    private function Transact(callable $fn, int $lockWaitMs, int $attempts): ?array
     {
         if (!$this->IsConfigured()) {
             return null;
         }
         $lock = 'TUYA_' . $this->InstanceID;
-        if (!IPS_SemaphoreEnter($lock, 5000)) {
-            $this->SendDebug('Transact', 'Semaphore belegt', 0);
+        if (!IPS_SemaphoreEnter($lock, $lockWaitMs)) {
+            $this->SendDebug('Transact', 'Sperre belegt, übersprungen', 0);
+            if ($attempts > 1) {
+                $this->LogMessage('Befehl verworfen: Gerät war ' . ($lockWaitMs / 1000) . ' s lang belegt', KL_WARNING);
+            }
             return null;
         }
         $debug = function (string $label, string $text) {
             $this->SendDebug($label, $text, 0);
         };
-        $t = null;
+        $error = '';
         try {
-            $t = new TuyaProtocol($this->ReadPropertyString('Host'), $this->ReadPropertyString('LocalKey'), 3.0, $debug);
-            $t->connect();
-            $result = $fn($t);
-            $this->SetDeviceStatus(self::STATUS_OK);
-            return $result;
-        } catch (Throwable $e) {
-            $this->SendDebug('Fehler', $e->getMessage(), 0);
-            $this->SetDeviceStatus(self::STATUS_UNREACHABLE);
+            for ($try = 1; $try <= $attempts; $try++) {
+                $t = null;
+                try {
+                    $t = new TuyaProtocol($this->ReadPropertyString('Host'), $this->ReadPropertyString('LocalKey'), 3.0, $debug);
+                    $t->connect();
+                    $result = $fn($t);
+                    $this->SetDeviceStatus(self::STATUS_OK);
+                    return $result;
+                } catch (Throwable $e) {
+                    $this->SendDebug('Fehler', 'Versuch ' . $try . ': ' . $e->getMessage(), 0);
+                    $error = $e->getMessage();
+                } finally {
+                    if ($t !== null) {
+                        $t->close();
+                    }
+                }
+                if ($try < $attempts) {
+                    IPS_Sleep(500);
+                }
+            }
+            $this->SetDeviceStatus(self::STATUS_UNREACHABLE, $error);
             return null;
         } finally {
-            if ($t !== null) {
-                $t->close();
-            }
             IPS_SemaphoreLeave($lock);
         }
     }
@@ -237,10 +255,15 @@ class TuyaThermostat extends IPSModule
             && strlen($this->ReadPropertyString('LocalKey')) === 16;
     }
 
-    private function SetDeviceStatus(int $status): void
+    private function SetDeviceStatus(int $status, string $error = ''): void
     {
         if ($this->GetStatus() !== $status) {
             $this->SetStatus($status);
+            if ($status === self::STATUS_UNREACHABLE) {
+                $this->LogMessage('Gerät nicht erreichbar: ' . $error, KL_WARNING);
+            } elseif ($status === self::STATUS_OK) {
+                $this->LogMessage('Gerät wieder erreichbar', KL_MESSAGE);
+            }
         }
         $this->SetValueIfChanged('Online', $status === self::STATUS_OK);
     }
