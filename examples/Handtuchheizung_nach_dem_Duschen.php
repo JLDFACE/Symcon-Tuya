@@ -1,8 +1,8 @@
 <?php
-// Handtuchheizung Bad – läuft nur nach dem Duschen.
+// Handtuchheizung Bad – läuft nur rund ums Duschen.
 //
-// Start:  Dusch-Szene geht an und außen < AUSSEN_MAX. Morgens (VON–BIS) heizt
-//         sie sofort vor, sonst startet sie erst bei „Wasser aus" zum Trocknen.
+// Start:  Dusch-Szene geht an und außen < AUSSEN_MAX → Heizung sofort an,
+//         zu jeder Tageszeit.
 // Ende:   „Wasser aus" wird erkannt, dann TROCKNEN Minuten Trockenzeit. Die
 //         letzten NACHLAUF Minuten übernimmt die Restwärme, die Heizung geht
 //         also schon TROCKNEN − NACHLAUF Minuten nach „Wasser aus" aus.
@@ -14,7 +14,7 @@
 //      ≥ HUM_FALL – der Höchstwert liegt etwa beim Wasser-aus.
 //   3. Dusch-Szene geht aus, oder DUSCHEN_MAX Minuten sind um – aber nur, wenn
 //      Feuchte oder Speicher überhaupt reagiert haben. Sonst wurde nicht
-//      geduscht (Szene nur kurz angetippt), der Lauf endet ohne Trocknen.
+//      geduscht (Szene nur kurz angetippt), die Heizung geht sofort aus.
 // Steigt die Feuchte beim Trocknen über die bisherige Spitze (zweite Person,
 // Pause unter der Dusche), gilt wieder „Duschen" und das Ende rückt nach hinten.
 // Baden: Ein Bad zeigt sich in Feuchte und Speicher kaum (Wanne einmal voll,
@@ -32,8 +32,6 @@ const WW_IST      = 52802;   // Wärmepumpe\Warmwasser-Ist
 const VENTIL      = 11484;   // Wärmepumpe\3-Wegeventil (1 = Speicher lädt)
 const FEUCHTE     = 53162;   // Vallox\Luftfeuchte (Abluft)
 
-const VON         = '05:00';
-const BIS         = '11:30';
 const AUSSEN_MAX  = 22.0;    // °C
 const SOLL        = 30;      // °C Solltemperatur während des Laufs (Gerätemaximum)
 const TROCKNEN    = 60;      // min Trockenzeit ab „Wasser aus"
@@ -106,12 +104,11 @@ if ($sender == 'Variable' && $_IPS['VARIABLE'] == SZENE) {
             return;
         }
         $aussen = GetValueFloat(AUSSEN);
-        $uhr = date('H:i');
         if ($aussen >= AUSSEN_MAX) {
-            status(sprintf('Duschen um %s – außen %.1f °C, Heizung bleibt aus', $uhr, $aussen));
+            status(sprintf('Duschen um %s – außen %.1f °C, Heizung bleibt aus', date('H:i'), $aussen));
             return;
         }
-        starten($uhr >= VON && $uhr < BIS);
+        starten();
     } elseif ($phase == PHASE_DUSCHEN && empty($z['wasserAus'])) {
         erkennen($now);   // letzter Stand der Signale, kann selbst „Wasser aus" melden
         if (GetValueInteger($vPhase) == PHASE_DUSCHEN) {
@@ -144,23 +141,23 @@ if ($sender == 'TimerEvent') {
         beenden('Trocknen fertig, Restwärme läuft nach');
         return;
     }
-    // Hätte die Heizung an sein müssen und ist es nicht (Befehl verloren, Gerät
-    // kurz weg), wird nachgeschaltet. Von Hand aus beendet den Lauf über POWER.
-    $sollAn = GetValueInteger($vPhase) == PHASE_TROCKNEN || !empty($z['vorheizen']);
-    if ($sollAn && !GetValueBoolean(POWER)) {
+    // Während eines Laufs muss die Heizung an sein. Ist sie es nicht (Befehl
+    // verloren, Gerät kurz weg), wird nachgeschaltet. Von Hand aus beendet den
+    // Lauf über POWER.
+    if (!GetValueBoolean(POWER)) {
         status(einschalten() ? 'Heizung nachgeschaltet (' . date('H:i') . ')' : 'Heizung reagiert weiterhin nicht (' . date('H:i') . ')');
     }
 }
 
 // ─────────────────────────────────────────────────────────────
 
-function starten(bool $vorheizen): void
+function starten(): void
 {
     global $self, $vPhase, $vAusUm, $now, $z;
     $ww = GetValueFloat(WW_IST);
     $hum = GetValueFloat(FEUCHTE);
     $z = [
-        'start' => $now, 'wasserAus' => 0, 'vorheizen' => $vorheizen,
+        'start' => $now, 'wasserAus' => 0,
         'wwMin' => $ww, 'wwStart' => $ww, 'wwMinSeit' => $now,
         'humStart' => $hum, 'humMax' => $hum, 'humMaxSeit' => $now,
     ];
@@ -168,12 +165,8 @@ function starten(bool $vorheizen): void
     SetValueInteger($vPhase, PHASE_DUSCHEN);   // vor dem Einschalten, sonst greift die strenge Regel
     SetValueInteger($vAusUm, 0);
     IPS_SetScriptTimer($self, TAKT);
-    if ($vorheizen) {
-        $ok = einschalten();
-        status(sprintf('Vorheizen seit %s (außen %.1f °C)', date('H:i'), GetValueFloat(AUSSEN)) . ($ok ? '' : NICHT_ERREICHT));
-    } else {
-        status(sprintf('Duschen seit %s – Heizung startet bei „Wasser aus"', date('H:i')));
-    }
+    $ok = einschalten();
+    status(sprintf('Duschen seit %s – Heizung an (außen %.1f °C)', date('H:i'), GetValueFloat(AUSSEN)) . ($ok ? '' : NICHT_ERREICHT));
 }
 
 function einschalten(): bool
@@ -248,8 +241,7 @@ function wasserAus(int $ts, string $grund): void
     $ausUm = max($ts + (TROCKNEN - NACHLAUF) * 60, GetValueInteger($vAusUm));
     SetValueInteger($vPhase, PHASE_TROCKNEN);
     SetValueInteger($vAusUm, $ausUm);
-    $ok = empty($z['vorheizen']) ? einschalten() : true;
-    status(sprintf('Wasser aus %s (%s) – trocknet, Heizung aus um %s', date('H:i', $ts), $grund, date('H:i', $ausUm)) . ($ok ? '' : NICHT_ERREICHT));
+    status(sprintf('Wasser aus %s (%s) – trocknet, Heizung aus um %s', date('H:i', $ts), $grund, date('H:i', $ausUm)));
 }
 
 function baden(): void
@@ -259,7 +251,7 @@ function baden(): void
     $hum = GetValueFloat(FEUCHTE);
     // wie ein Lauf, dessen „Wasser aus" jetzt ist – Feuchte beim Aussteigen verlängert
     $z = [
-        'start' => $now, 'wasserAus' => $now, 'vorheizen' => true, 'baden' => true,
+        'start' => $now, 'wasserAus' => $now, 'baden' => true,
         'wwMin' => $ww, 'wwStart' => $ww, 'wwMinSeit' => $now,
         'humStart' => $hum, 'humMax' => $hum, 'humMaxSeit' => $now,
     ];
