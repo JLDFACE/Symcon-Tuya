@@ -17,6 +17,10 @@
 //      geduscht (Szene nur kurz angetippt), der Lauf endet ohne Trocknen.
 // Steigt die Feuchte beim Trocknen über die bisherige Spitze (zweite Person,
 // Pause unter der Dusche), gilt wieder „Duschen" und das Ende rückt nach hinten.
+// Baden: Ein Bad zeigt sich in Feuchte und Speicher kaum (Wanne einmal voll,
+// dann lange nichts). Schalter „Baden" startet die Heizung sofort für BADEN
+// Minuten; steigt beim Aussteigen die Feuchte, verlängert sich der Lauf.
+// Die Dusch-Szene greift während eines Bads nicht ein.
 // Streng: Wird die Heizung außerhalb eines Laufs eingeschaltet (App, Gerät),
 // schaltet dieses Skript sie sofort wieder aus.
 
@@ -35,6 +39,7 @@ const SOLL        = 30;      // °C Solltemperatur während des Laufs (Gerätema
 const TROCKNEN    = 60;      // min Trockenzeit ab „Wasser aus"
 const NACHLAUF    = 20;      // min Restwärme nach dem Ausschalten
 const DUSCHEN_MAX = 45;      // min ohne Erkennung → gilt als Wasser aus
+const BADEN       = 90;      // min Laufzeit nach Druck auf „Baden"
 const LAUF_MAX    = 120;     // min Sicherheitsgrenze für den ganzen Lauf
 const WW_DROP     = 0.5;     // K
 const WW_RUHE     = 4;       // min
@@ -51,6 +56,7 @@ $vPhase    = IPS_GetObjectIDByIdent('Phase', $self);
 $vAusUm    = IPS_GetObjectIDByIdent('AusUm', $self);
 $vStatus   = IPS_GetObjectIDByIdent('Status', $self);
 $vZustand  = IPS_GetObjectIDByIdent('Zustand', $self);
+$vBaden    = IPS_GetObjectIDByIdent('Baden', $self);
 
 $sender = $_IPS['SENDER'];
 $now = time();
@@ -62,6 +68,19 @@ if (($sender == 'WebFront' || $sender == 'Action') && ($_IPS['VARIABLE'] ?? 0) =
     SetValueBoolean($vAktiv, (bool)$_IPS['VALUE']);
     if (!$_IPS['VALUE'] && $phase != PHASE_AUS) {
         beenden('Automatik ausgeschaltet');
+    }
+    return;
+}
+
+// Schalter „Baden": ein Bad zeigt sich weder in Feuchte noch Speicher
+// verlässlich, deshalb startet man den Lauf von Hand
+if (($sender == 'WebFront' || $sender == 'Action') && ($_IPS['VARIABLE'] ?? 0) == $vBaden) {
+    if ($_IPS['VALUE']) {
+        baden();
+    } elseif ($phase != PHASE_AUS) {
+        beenden('Baden beendet');
+    } else {
+        SetValueBoolean($vBaden, false);
     }
     return;
 }
@@ -79,6 +98,9 @@ if ($sender == 'Variable' && $_IPS['VARIABLE'] == POWER) {
 
 // Dusch-Szene
 if ($sender == 'Variable' && $_IPS['VARIABLE'] == SZENE) {
+    if (GetValueBoolean($vBaden)) {
+        return;   // ein laufendes Bad lässt sich von der Szene nicht stören
+    }
     if ($_IPS['VALUE']) {
         if (!GetValueBoolean($vAktiv)) {
             return;
@@ -222,18 +244,40 @@ function wasserAus(int $ts, string $grund): void
     global $z, $vPhase, $vAusUm;
     $z['wasserAus'] = $ts;
     speichern($z);
-    $ausUm = $ts + (TROCKNEN - NACHLAUF) * 60;
+    // ein späteres „Wasser aus" verlängert, verkürzt aber nie (wichtig beim Baden)
+    $ausUm = max($ts + (TROCKNEN - NACHLAUF) * 60, GetValueInteger($vAusUm));
     SetValueInteger($vPhase, PHASE_TROCKNEN);
     SetValueInteger($vAusUm, $ausUm);
     $ok = empty($z['vorheizen']) ? einschalten() : true;
     status(sprintf('Wasser aus %s (%s) – trocknet, Heizung aus um %s', date('H:i', $ts), $grund, date('H:i', $ausUm)) . ($ok ? '' : NICHT_ERREICHT));
 }
 
+function baden(): void
+{
+    global $self, $vPhase, $vAusUm, $vBaden, $now, $z;
+    $ww = GetValueFloat(WW_IST);
+    $hum = GetValueFloat(FEUCHTE);
+    // wie ein Lauf, dessen „Wasser aus" jetzt ist – Feuchte beim Aussteigen verlängert
+    $z = [
+        'start' => $now, 'wasserAus' => $now, 'vorheizen' => true, 'baden' => true,
+        'wwMin' => $ww, 'wwStart' => $ww, 'wwMinSeit' => $now,
+        'humStart' => $hum, 'humMax' => $hum, 'humMaxSeit' => $now,
+    ];
+    speichern($z);
+    SetValueBoolean($vBaden, true);
+    SetValueInteger($vPhase, PHASE_TROCKNEN);   // vor dem Einschalten, sonst greift die strenge Regel
+    SetValueInteger($vAusUm, $now + BADEN * 60);
+    IPS_SetScriptTimer($self, TAKT);
+    $ok = einschalten();
+    status(sprintf('Baden seit %s – Heizung aus um %s', date('H:i'), date('H:i', $now + BADEN * 60)) . ($ok ? '' : NICHT_ERREICHT));
+}
+
 function beenden(string $grund): void
 {
-    global $self, $vPhase, $vAusUm;
+    global $self, $vPhase, $vAusUm, $vBaden;
     SetValueInteger($vPhase, PHASE_AUS);       // vor dem Ausschalten
     SetValueInteger($vAusUm, 0);
+    SetValueBoolean($vBaden, false);
     IPS_SetScriptTimer($self, 0);
     if (GetValueBoolean(POWER)) {
         TUYA_SetPower(HEIZUNG, false);
